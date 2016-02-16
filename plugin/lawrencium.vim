@@ -902,6 +902,9 @@ function! s:Hg(bang, ...) abort
         endif
     else
         " Just print out the output of the command.
+        if (has('win32') || has('win64') || has('win32unix')) && &encoding != 'cp932' && has('iconv')
+          let l:output = iconv(l:output, 'cp932', &encoding)
+        endif
         echo l:output
     endif
 endfunction
