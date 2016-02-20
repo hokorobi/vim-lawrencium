@@ -61,11 +61,6 @@ function! s:stripslash(path)
     return fnamemodify(a:path, ':s?[/\\]$??')
 endfunction
 
-" Surrounds the given string with double quotes.
-function! s:addquotes(str)
-    return '"' . a:str . '"'
-endfunction
-
 " Returns whether a path is absolute.
 function! s:isabspath(path)
     return a:path =~# '\v^(\w\:)?[/\\]'
@@ -356,24 +351,38 @@ function! s:HgRepo.GetCommand(command, ...) abort
     if a:0 == 1 && type(a:1) == type([])
         let l:arg_list = a:1
     endif
+    let l:prev_shellslash = &shellslash
+    setlocal noshellslash
     let l:hg_command = g:lawrencium_hg_executable . ' --repository ' . shellescape(s:stripslash(self.root_dir))
     let l:hg_command = l:hg_command . ' ' . a:command
     for l:arg in l:arg_list
-        if stridx(l:arg, ' ') >= 0
-            let l:hg_command = l:hg_command . ' "' . l:arg . '"'
-        else
-            let l:hg_command = l:hg_command . ' ' . l:arg
-        endif
+		let l:hg_command = l:hg_command . ' ' . shellescape(l:arg)
     endfor
+    if l:prev_shellslash
+        setlocal shellslash
+    endif
     return l:hg_command
 endfunction
 
 " Runs a Mercurial command in the repo.
 function! s:HgRepo.RunCommand(command, ...) abort
+    let l:all_args = [1, a:command] + a:000
+    return call(self['RunCommandEx'], l:all_args, self)
+endfunction
+
+function! s:HgRepo.RunCommandEx(plain_mode, command, ...) abort
+    let l:prev_hgplain = $HGPLAIN
+    if a:plain_mode
+        let $HGPLAIN = 'true'
+    endif
     let l:all_args = [a:command] + a:000
     let l:hg_command = call(self['GetCommand'], l:all_args, self)
     call s:trace("Running Mercurial command: " . l:hg_command)
-    return system(l:hg_command)
+    let l:cmd_out = system(l:hg_command)
+    if a:plain_mode
+        let $HGPLAIN = l:prev_hgplain
+    endif
+    return l:cmd_out
 endfunction
 
 " Runs a Mercurial command in the repo and reads its output into the current
@@ -672,7 +681,7 @@ function! s:read_lawrencium_rev(repo, path_parts, full_path) abort
     if l:rev == ''
         call a:repo.ReadCommandOutput('cat', a:full_path)
     else
-        call a:repo.ReadCommandOutput('cat', '-r', s:addquotes(l:rev), a:full_path)
+        call a:repo.ReadCommandOutput('cat', '-r', l:rev, a:full_path)
     endif
 endfunction
 
@@ -704,6 +713,17 @@ function! s:read_lawrencium_log(repo, path_parts, full_path) abort
     setlocal filetype=hglog
 endfunction
 
+function! s:read_lawrencium_logpatch(repo, path_parts, full_path) abort
+    let l:log_cmd = 'log --patch --verbose --rev ' . a:path_parts['value']
+
+    if a:path_parts['path'] == ''
+        call a:repo.ReadCommandOutput(l:log_cmd)
+    else
+        call a:repo.ReadCommandOutput(l:log_cmd, a:full_path)
+    endif
+    setlocal filetype=diff
+endfunction
+
 " Diff revisions (`hg diff`)
 function! s:read_lawrencium_diff(repo, path_parts, full_path) abort
     let l:diffargs = []
@@ -712,11 +732,11 @@ function! s:read_lawrencium_diff(repo, path_parts, full_path) abort
         let l:rev1 = strpart(a:path_parts['value'], 0, l:commaidx)
         let l:rev2 = strpart(a:path_parts['value'], l:commaidx + 1)
         if l:rev1 == '-'
-            let l:diffargs = [ '-r', s:addquotes(l:rev2) ]
+            let l:diffargs = [ '-r', l:rev2 ]
         elseif l:rev2 == '-'
-            let l:diffargs = [ '-r', s:addquotes(l:rev1) ]
+            let l:diffargs = [ '-r', l:rev1 ]
         else
-            let l:diffargs = [ '-r', s:addquotes(l:rev1), '-r', s:addquotes(l:rev2) ]
+            let l:diffargs = [ '-r', l:rev1, '-r', l:rev2 ]
         endif
     elseif a:path_parts['value'] != ''
         let l:diffargs = [ '-c', a:path_parts['value'] ]
@@ -767,6 +787,7 @@ endfunction
 let s:lawrencium_file_readers = {
             \'rev': function('s:read_lawrencium_rev'),
             \'log': function('s:read_lawrencium_log'),
+            \'logpatch': function('s:read_lawrencium_logpatch'),
             \'diff': function('s:read_lawrencium_diff'),
             \'status': function('s:read_lawrencium_status'),
             \'annotate': function('s:read_lawrencium_annotate'),
@@ -875,7 +896,7 @@ function! s:Hg(bang, ...) abort
         " to make auto-completed paths work magically.
         execute 'cd! ' . fnameescape(l:repo.root_dir)
     endif
-    let l:output = call(l:repo.RunCommand, a:000, l:repo)
+    let l:output = call(l:repo.RunCommandEx, [0] + a:000, l:repo)
     if g:lawrencium_auto_cd
         execute 'cd! -'
     endif
@@ -2018,8 +2039,10 @@ function! s:HgAnnotate(bang, verbose, ...) abort
 
     " Add some other nice commands and mappings.
     command! -buffer Hgannotatediffsum :call s:HgAnnotate_DiffSummary()
+    command! -buffer Hgannotatelog     :call s:HgAnnotate_DiffSummary(1)
     if g:lawrencium_define_mappings
         nnoremap <buffer> <silent> <cr> :Hgannotatediffsum<cr>
+        nnoremap <buffer> <silent> <leader><cr> :Hgannotatelog<cr>
     endif
 
     " Clean up when the annotate buffer is deleted.
@@ -2033,15 +2056,20 @@ function! s:HgAnnotate_Delete(bufnr) abort
     endif
 endfunction
 
-function! s:HgAnnotate_DiffSummary() abort
+function! s:HgAnnotate_DiffSummary(...) abort
     " Get the path for the diff of the revision specified under the cursor.
     let l:line = getline('.')
     let l:rev_hash = matchstr(l:line, '\v[a-f0-9]{12}')
+    let l:log = (a:0 > 0 ? a:1 : 0)
 
     " Get the Lawrencium path for the diff, and the buffer object for the
     " annotation.
     let l:repo = s:hg_repo()
-    let l:path = l:repo.GetLawrenciumPath(b:lawrencium_annotated_path, 'diff', l:rev_hash)
+    if l:log
+      let l:path = l:repo.GetLawrenciumPath(b:lawrencium_annotated_path, 'logpatch', l:rev_hash)
+    else
+      let l:path = l:repo.GetLawrenciumPath(b:lawrencium_annotated_path, 'diff', l:rev_hash)
+    endif
     let l:annotate_buffer = s:buffer_obj()
 
     " Find a window already displaying diffs for this annotation.
@@ -2191,7 +2219,7 @@ function! s:HgRecord(split) abort
     if a:split == 1
         let l:cmd = 'keepalt rightbelow vsplit '
     endif
-    let l:rev_path = l:repo.GetLawrenciumPath(expand('%'), 'rev', '')
+    let l:rev_path = l:repo.GetLawrenciumPath(expand('%:p'), 'rev', '')
     execute l:cmd . fnameescape(l:rev_path)
 
     " This new buffer with the parent revision is set as a Lawrencium buffer.
