@@ -2,6 +2,7 @@
 " Maintainer:   Ludovic Chabant <http://ludovic.chabant.com>
 " Version:      0.4.0
 
+
 " Globals {{{
 
 if !exists('g:lawrencium_debug')
@@ -356,7 +357,7 @@ function! s:HgRepo.GetCommand(command, ...) abort
     let l:hg_command = g:lawrencium_hg_executable . ' --repository ' . shellescape(s:stripslash(self.root_dir))
     let l:hg_command = l:hg_command . ' ' . a:command
     for l:arg in l:arg_list
-		let l:hg_command = l:hg_command . ' ' . shellescape(l:arg)
+        let l:hg_command = l:hg_command . ' ' . shellescape(l:arg)
     endfor
     if l:prev_shellslash
         setlocal shellslash
@@ -1419,6 +1420,7 @@ function! s:HgDiff_DiffThis(diff_id) abort
     let w:lawrencium_diffoff['&cursorbind'] = &l:cursorbind
     let w:lawrencium_diffoff['&foldmethod'] = &l:foldmethod
     let w:lawrencium_diffoff['&foldcolumn'] = &l:foldcolumn
+    let w:lawrencium_diffoff['&foldenable'] = &l:foldenable
     let w:lawrencium_diff_id = a:diff_id
     diffthis
     autocmd BufWinLeave <buffer> call s:HgDiff_CleanUp()
@@ -2210,7 +2212,7 @@ function! s:HgRecord(split) abort
     call l:orig_buf.DefineCommand('Hgrecordabort', ':call s:HgRecord_Abort()')
     call l:orig_buf.DefineCommand('Hgrecordcommit', ':call s:HgRecord_Execute()')
     call s:HgDiff_DiffThis(l:diff_id)
-    setlocal foldmethod=marker
+    setlocal foldmethod=diff
 
     " Split the window and open the parent revision in the right or bottom
     " window. Keep the current buffer in the left or top window... we're going
@@ -2246,8 +2248,9 @@ function! s:HgRecord(split) abort
 
     " Make it the other part of the diff.
     call s:HgDiff_DiffThis(l:diff_id)
-    setlocal foldmethod=marker
+    setlocal foldmethod=diff
     call l:rec_buf.SetVar('&filetype', l:orig_buf.GetVar('&filetype'))
+    call l:rec_buf.SetVar('&fileformat', l:orig_buf.GetVar('&fileformat'))
 
     if g:lawrencium_record_start_in_working_buffer
         wincmd p
